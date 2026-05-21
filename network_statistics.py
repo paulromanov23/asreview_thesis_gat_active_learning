@@ -2,9 +2,7 @@ import random
 import numpy as np
 import networkx as nx
 from collections import Counter
-
 from graph_builder import build_nx_graph
-# network_statistics.py — top of file
 from graph_builder import build_mesh_edges_fast 
 
 
