@@ -124,7 +124,7 @@ def run_pipeline(data_dir, target_degree=5, save_dir=None):
     # ── Summary ───────────────────────────────────────────────────────────────
     log.info("="*60)
     log.info(f"Pipeline complete in {time.time()-t_start:.1f}s")
-    log.info(f"\n{stats_df[['n_papers','prevalence','degree_mean','homophily_vs_random']].to_string()}")
+    log.info(f"\n{stats_df[['n_papers','prevalence','degree_mean','homophily_adj','homophily_target_class']].to_string()}")
 
     return stats_df, graphs
 
@@ -133,5 +133,5 @@ if __name__ == '__main__':
     stats, graphs = run_pipeline(
         data_dir='data/',
         target_degree=5,
-        save_dir='outputs/'
+        save_dir='outputs_directed/'
     )

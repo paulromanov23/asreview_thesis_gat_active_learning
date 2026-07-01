@@ -44,7 +44,7 @@ def build_nx_graph(df, mesh_threshold, mesh_col='mesh_terms_specific'):
     """NetworkX graph — used for statistics only."""
     df = df.reset_index(drop=True)
     id_to_idx = {oid: idx for idx, oid in enumerate(df['openalex_id'])}
-    G = nx.Graph()
+    G = nx.DiGraph()
     G.add_nodes_from(range(len(df)))
 
     # Citation edges — vectorized using apply instead of iterrows
@@ -88,11 +88,21 @@ def build_pyg_graph(df, mesh_threshold, mesh_col='mesh_terms_specific'):
     mesh_dst = [j for i, j in mesh_pairs]
 
     # ── Combine — undirected (add both directions) ────────────────────────────
-    all_src = citation_src + citation_dst + mesh_src + mesh_dst
-    all_dst = citation_dst + citation_src + mesh_dst + mesh_src
+    #all_src = citation_src + citation_dst + mesh_src + mesh_dst
+    #all_dst = citation_dst + citation_src + mesh_dst + mesh_src
+    #edge_type = (
+    #[0] * len(citation_src) +    # outgoing citations (A cites B)
+    #[2] * len(citation_src) +    # incoming citations (B cited by A)
+    #[1] * len(mesh_src) * 2      # MeSH co-occurrence, stays undirected
+    #)
+
+    #  ──────────────────────────── Directed citations — only A→B  ────────────────────────────
+    all_src = citation_src + mesh_src + mesh_dst
+    all_dst = citation_dst + mesh_dst + mesh_src
+
     edge_type = (
-        [0] * len(citation_src) * 2 +   # citation both directions
-        [1] * len(mesh_src) * 2          # MeSH both directions
+        [0] * len(citation_src) +   # outgoing citations (A cites B) only
+        [1] * len(mesh_src) * 2     # MeSH stays undirected
     )
 
     edge_index = torch.tensor([all_src, all_dst], dtype=torch.long)
@@ -107,6 +117,7 @@ def build_pyg_graph(df, mesh_threshold, mesh_col='mesh_terms_specific'):
     # ── Metadata — useful for active learning loop ────────────────────────────
     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr, y=y)
     data.num_nodes = n
+    #print(data.edge_index.shape[1])
     data.openalex_ids = df['openalex_id'].tolist()
     data.titles = df['title'].tolist()
 

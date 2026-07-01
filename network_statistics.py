@@ -50,7 +50,56 @@ def node_statistics(df):
 
 
 # ── Graph-level statistics ────────────────────────────────────────────────────
+def compute_homophily(G, labels):
+    """
+    Computes both global degree-weighted adjusted homophily 
+    and class-specific homophily for imbalanced graphs.
+    """
+    if G.number_of_edges() == 0:
+        return {"homophily_adj": 0.0, "homophily_class_1": 0.0}
 
+    # Total edges and node degrees
+    M = G.number_of_edges()
+    degrees = dict(G.degree())
+    
+    # 1. Official Platonov/Newman Adjusted Homophily (Degree-weighted)
+    # Ref: "Characterizing Graph Datasets for Node Classification" (NeurIPS)
+    same_edges = sum(1 for u, v in G.edges() if labels.get(u) == labels.get(v))
+    h_edge = same_edges / M
+    
+    # Calculate degree-weighted class distributions
+    deg_sum_0 = sum(degrees[n] for n in G.nodes() if labels.get(n) == 0)
+    deg_sum_1 = sum(degrees[n] for n in G.nodes() if labels.get(n) == 1)
+    total_deg = 2 * M
+    
+    p_bar_0 = deg_sum_0 / total_deg if total_deg > 0 else 0
+    p_bar_1 = deg_sum_1 / total_deg if total_deg > 0 else 0
+    expected_global = (p_bar_0 ** 2) + (p_bar_1 ** 2)
+    
+    homophily_adj = (h_edge - expected_global) / (1.0 - expected_global) if expected_global < 1.0 else 0.0
+
+    # 2. Class-Specific Homophily (Crucial for GAT / Minority Class)
+    # Measures the percentage of intra-class edges specifically for Class 1
+    c1_internal_edges = 0
+    c1_total_edges = 0
+    
+    for u, v in G.edges():
+        u_lbl = labels.get(u)
+        v_lbl = labels.get(v)
+        
+        if u_lbl == 1 or v_lbl == 1:
+            c1_total_edges += 1
+            if u_lbl == v_lbl == 1:
+                c1_internal_edges += 1
+
+    homophily_class_1 = c1_internal_edges / c1_total_edges if c1_total_edges > 0 else 0.0
+
+    return {
+        "homophily_adj": homophily_adj,       # Global structure (-1 to 1)
+        "homophily_class_1": homophily_class_1 # Target class clustering (0 to 1)
+    }
+
+    
 def graph_statistics(df, mesh_threshold, mesh_col='mesh_terms_specific'):
     """
     Statistics about the full graph structure.
@@ -76,8 +125,8 @@ def graph_statistics(df, mesh_threshold, mesh_col='mesh_terms_specific'):
     degrees = [d for _, d in G.degree()]
 
     # ── Connected components ──────────────────────────────────────────────────
-    components = list(nx.connected_components(G))
-    largest_cc  = G.subgraph(max(components, key=len))
+    components = list(nx.weakly_connected_components(G))
+    largest_cc  = G.subgraph(max(components, key=len)).to_undirected()
     n_largest   = largest_cc.number_of_nodes()
 
     # ── Diameter / avg path length ────────────────────────────────────────────
@@ -107,18 +156,12 @@ def graph_statistics(df, mesh_threshold, mesh_col='mesh_terms_specific'):
         assortativity = None
 
     # ── Label homophily ───────────────────────────────────────────────────────
-    # Do relevant papers connect to each other more than random chance predicts?
+    labels = df['label_included'].values
+    n_relevant = int(labels.sum())
     labels = dict(enumerate(df['label_included'].values))
-    same_label_edges = sum(
-        1 for u, v in G.edges()
-        if labels.get(u) == labels.get(v) == 1
-    )
-    total_relevant   = df['label_included'].sum()
-    expected_homophily = (total_relevant / len(df)) ** 2  # random baseline
-
-    n_total_edges = max(G.number_of_edges(), 1)
-    n_mesh_cite   = max(len(mesh_edges) + len(citation_edges), 1)
-
+    homophily_results = compute_homophily(G, labels)
+    same_label_edges = sum( 1 for u, v in G.edges() if labels.get(u) == labels.get(v) == 1 )
+    
     return {
         # Size
         'n_nodes':                 G.number_of_nodes(),
@@ -132,6 +175,7 @@ def graph_statistics(df, mesh_threshold, mesh_col='mesh_terms_specific'):
         'degree_90pct':            np.percentile(degrees, 90),
         'degree_max':              max(degrees),
         'pct_isolated':            sum(1 for d in degrees if d == 0) / len(degrees),
+        'pct_isolated_relevant':   sum(1 for i, d in enumerate(degrees) if d == 0 and labels[i] == 1) / n_relevant,
 
         # Connectivity
         'n_components':            len(components),
@@ -144,9 +188,9 @@ def graph_statistics(df, mesh_threshold, mesh_col='mesh_terms_specific'):
         'degree_assortativity':    assortativity,
 
         # Label homophily — key GNN viability metric
-        'relevant_edge_density':   same_label_edges / n_mesh_cite,
-        'homophily_vs_random':     (same_label_edges / n_total_edges)
-                                   / max(expected_homophily, 1e-9),
+        'relevant_edge_density': same_label_edges / max(len(mesh_edges) + len(citation_edges), 1),
+        'homophily_adj':         homophily_results["homophily_adj"],
+        'homophily_target_class': homophily_results["homophily_class_1"], # Use this for GAT viability!
     }
 
 
@@ -191,9 +235,11 @@ def print_statistics(name, df, mesh_threshold, mesh_col='mesh_terms_specific'):
 
     print(f"\n--- Label Homophily ---")
     print(f"  Relevant-relevant edge density: "
-          f"{graph_stats['relevant_edge_density']:.4f}")
-    print(f"  Homophily vs random baseline:   "
-          f"{graph_stats['homophily_vs_random']:.2f}x")
-    print(f"  (>1.0 = relevant papers cluster more than chance)")
+      f"{graph_stats['relevant_edge_density']:.4f}")
+    print(f"  Adjusted homophily (h_adj):     "
+      f"{graph_stats['homophily_adj']:.4f}")
+    print(f"  (0=random, 1=perfectly clustered, negative=heterophilic)")
+    print(f"  Target class homophily:          "
+      f"{graph_stats['homophily_target_class']:.4f}")
 
     return {**node_stats, **graph_stats}
